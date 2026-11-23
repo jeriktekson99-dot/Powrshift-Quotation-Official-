@@ -282,7 +282,6 @@ export default function App() {
   const [activeLoadedId, setActiveLoadedId] = useState<string>('');
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isLoadingRecords, setIsLoadingRecords] = useState<boolean>(true);
 
   // Load saved records from Supabase on mount (fallback to localStorage only if unconfigured/unavailable)
@@ -325,34 +324,6 @@ export default function App() {
       isMounted = false;
     };
   }, []);
-
-  const handleSyncFromSupabase = async () => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-    try {
-      const result = await fetchQuotationsFromSupabase();
-      if (result.configured && result.records !== null) {
-        setSavedQuotations(result.records);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(result.records));
-        } catch (e) {
-          console.error('Failed to cache Supabase records in localStorage', e);
-        }
-        setSaveToast(`Synced ${result.records.length} record(s) from Supabase`);
-      } else if (result.error) {
-        setSaveToast(`Supabase sync error: ${result.error}`);
-      } else {
-        setSaveToast('Supabase is not configured — showing local records');
-      }
-    } catch (err) {
-      setSaveToast(
-        `Sync failed: ${err instanceof Error ? err.message : 'Unknown error'}`
-      );
-    } finally {
-      setIsSyncing(false);
-      setTimeout(() => setSaveToast(null), 3500);
-    }
-  };
 
   // Save current quotation to Supabase (if configured) & localStorage
   const handleSaveCurrentQuotation = async () => {
@@ -1127,16 +1098,6 @@ Prepared by: ${engineerName}
                   </p>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={handleSyncFromSupabase}
-                disabled={isSyncing}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded bg-[#063217] text-[#D4AF37] hover:bg-[#084420] border border-[#D4AF37]/70 transition-colors disabled:opacity-60"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Syncing...' : 'Refresh Records'}</span>
-              </button>
             </div>
 
             {/* Filter & Summary Bar */}
@@ -1194,7 +1155,7 @@ Prepared by: ${engineerName}
             </div>
 
             {/* Grid of Saved Records */}
-            {isLoadingRecords || isSyncing ? (
+            {isLoadingRecords ? (
               <div className="bg-white border border-slate-200 rounded-lg p-12 text-center shadow-sm flex flex-col items-center justify-center gap-3">
                 <RefreshCw className="w-8 h-8 text-[#0A3A1E] animate-spin" />
                 <p className="text-xs font-semibold text-slate-600">Loading saved records...</p>
@@ -1342,7 +1303,7 @@ Prepared by: ${engineerName}
             {/* Bottom Divider & Record Count */}
             <div className="border-t border-slate-300 pt-4 text-right text-xs text-slate-600">
               <span className="font-semibold text-slate-700">
-                {isLoadingRecords || isSyncing
+                {isLoadingRecords
                   ? 'Loading saved records...'
                   : `Showing ${filteredSavedQuotations.length} of ${savedQuotations.length}`}
               </span>
@@ -2639,7 +2600,7 @@ Prepared by: ${engineerName}
 
               {/* Saved Records List */}
               <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
-                {isLoadingRecords || isSyncing ? (
+                {isLoadingRecords ? (
                   <div className="text-center py-12 px-4 flex flex-col items-center justify-center gap-2.5">
                     <RefreshCw className="w-7 h-7 text-[#0A3A1E] animate-spin" />
                     <p className="text-xs font-semibold text-slate-600">Loading saved records...</p>
