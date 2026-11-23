@@ -271,41 +271,53 @@ export default function App() {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const proposalSheetRef = useRef<HTMLDivElement>(null);
 
-  // Saved Client Records & Quotations State
-  const [savedQuotations, setSavedQuotations] = useState<SavedQuotation[]>(() => {
-    try {
-      const item = localStorage.getItem(STORAGE_KEY);
-      if (item) {
-        const parsed = JSON.parse(item);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load saved quotes from localStorage', e);
-    }
-    return INITIAL_SAVED_QUOTATIONS;
-  });
+  // Saved Client Records & Quotations State (starts empty until remote/local fetch completes)
+  const [savedQuotations, setSavedQuotations] = useState<SavedQuotation[]>([]);
 
   const [activeMainTab, setActiveMainTab] = useState<'calculator' | 'saved_records'>('calculator');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [packageFilter, setPackageFilter] = useState<string>('All Packages');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'highest_kwp' | 'lowest_kwp'>('newest');
-  const [activeLoadedId, setActiveLoadedId] = useState<string>('quote-001');
+  const [activeLoadedId, setActiveLoadedId] = useState<string>('');
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isLoadingRecords, setIsLoadingRecords] = useState<boolean>(true);
 
-  // Sync saved records from Supabase on mount when configured
+  // Load saved records from Supabase on mount (fallback to localStorage only if unconfigured/unavailable)
   useEffect(() => {
     let isMounted = true;
     const loadFromSupabase = async () => {
-      const result = await fetchQuotationsFromSupabase();
-      if (!isMounted || !result.configured || result.records === null) return;
-      setSavedQuotations(result.records);
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(result.records));
-      } catch (e) {
-        console.error('Failed to cache Supabase records in localStorage', e);
+        const result = await fetchQuotationsFromSupabase();
+        if (!isMounted) return;
+
+        if (result.configured && result.records !== null) {
+          setSavedQuotations(result.records);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(result.records));
+          } catch (e) {
+            console.error('Failed to cache Supabase records in localStorage', e);
+          }
+          return;
+        }
+
+        try {
+          const item = localStorage.getItem(STORAGE_KEY);
+          if (item) {
+            const parsed = JSON.parse(item);
+            if (Array.isArray(parsed)) {
+              setSavedQuotations(parsed);
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load saved quotes from localStorage', e);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingRecords(false);
+        }
       }
     };
     loadFromSupabase();
@@ -1088,7 +1100,7 @@ Prepared by: ${engineerName}
                     : 'bg-[#E6F4EA] text-[#059669]'
                 }`}
               >
-                {savedQuotations.length}
+                {isLoadingRecords ? '...' : savedQuotations.length}
               </span>
             </button>
           </div>
@@ -1182,7 +1194,12 @@ Prepared by: ${engineerName}
             </div>
 
             {/* Grid of Saved Records */}
-            {filteredSavedQuotations.length === 0 ? (
+            {isLoadingRecords || isSyncing ? (
+              <div className="bg-white border border-slate-200 rounded-lg p-12 text-center shadow-sm flex flex-col items-center justify-center gap-3">
+                <RefreshCw className="w-8 h-8 text-[#0A3A1E] animate-spin" />
+                <p className="text-xs font-semibold text-slate-600">Loading saved records...</p>
+              </div>
+            ) : filteredSavedQuotations.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-lg p-12 text-center shadow-sm">
                 <FolderArchive className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                 <h3 className="text-sm font-bold text-slate-800">No saved quotation records found</h3>
@@ -1325,7 +1342,9 @@ Prepared by: ${engineerName}
             {/* Bottom Divider & Record Count */}
             <div className="border-t border-slate-300 pt-4 text-right text-xs text-slate-600">
               <span className="font-semibold text-slate-700">
-                Showing {filteredSavedQuotations.length} of {savedQuotations.length}
+                {isLoadingRecords || isSyncing
+                  ? 'Loading saved records...'
+                  : `Showing ${filteredSavedQuotations.length} of ${savedQuotations.length}`}
               </span>
             </div>
           </div>
@@ -2555,7 +2574,7 @@ Prepared by: ${engineerName}
 
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#E6F4EA] text-[#059669]">
-                    {savedQuotations.length} Saved
+                    {isLoadingRecords ? '...' : `${savedQuotations.length} Saved`}
                   </span>
                   <button
                     onClick={() => setIsSidebarOpen(false)}
@@ -2620,7 +2639,12 @@ Prepared by: ${engineerName}
 
               {/* Saved Records List */}
               <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
-                {filteredSavedQuotations.length === 0 ? (
+                {isLoadingRecords || isSyncing ? (
+                  <div className="text-center py-12 px-4 flex flex-col items-center justify-center gap-2.5">
+                    <RefreshCw className="w-7 h-7 text-[#0A3A1E] animate-spin" />
+                    <p className="text-xs font-semibold text-slate-600">Loading saved records...</p>
+                  </div>
+                ) : filteredSavedQuotations.length === 0 ? (
                   <div className="text-center py-12 px-4">
                     <FolderArchive className="w-10 h-10 text-slate-300 mx-auto mb-2" />
                     <p className="text-xs font-semibold text-slate-700">No matching client quotations found</p>
