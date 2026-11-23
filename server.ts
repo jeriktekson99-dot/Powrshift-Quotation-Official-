@@ -198,6 +198,115 @@ async function startServer() {
     }
   });
 
+  app.put('/api/quotations/:id', async (req: Request, res: Response) => {
+    const supabase = getServerSupabase();
+    if (!supabase) {
+      return res.json({ configured: false, record: null });
+    }
+
+    const recordId = String(req.params.id || '').trim();
+    const payload = req.body as QuotationPayload | undefined;
+    if (!recordId || !payload || typeof payload !== 'object') {
+      return res
+        .status(400)
+        .json({ configured: true, record: null, error: 'Invalid update payload' });
+    }
+
+    try {
+      let quotationId =
+        typeof payload.quotationId === 'string'
+          ? payload.quotationId.trim()
+          : '';
+
+      if (!quotationId) {
+        const { data: existingRecord } = await supabase
+          .from('saved_records')
+          .select('quotation_id')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (existingRecord?.quotation_id) {
+          quotationId = existingRecord.quotation_id;
+        }
+      }
+
+      const quotationValues = buildCalculatorQuotationInsert(payload);
+      let updatedQuotation;
+
+      if (quotationId) {
+        const { data, error } = await supabase
+          .from('calculator_quotations')
+          .update(quotationValues)
+          .eq('id', quotationId)
+          .select()
+          .single();
+
+        if (error || !data) {
+          return res.status(500).json({
+            configured: true,
+            record: null,
+            error: error?.message || 'Failed to update calculator_quotations',
+          });
+        }
+        updatedQuotation = data;
+      } else {
+        const { data, error } = await supabase
+          .from('calculator_quotations')
+          .insert(quotationValues)
+          .select()
+          .single();
+
+        if (error || !data) {
+          return res.status(500).json({
+            configured: true,
+            record: null,
+            error: error?.message || 'Failed to create linked calculator_quotations',
+          });
+        }
+        updatedQuotation = data;
+      }
+
+      const { data: updatedRecord, error: recordError } = await supabase
+        .from('saved_records')
+        .update({
+          quotation_id: updatedQuotation.id,
+          name: updatedQuotation.client_full_name,
+          reference_number: updatedQuotation.quote_reference,
+          address: updatedQuotation.site_location_address,
+          phone_number: updatedQuotation.contact_phone,
+          email: updatedQuotation.email_address,
+          battery_storage: Number(updatedQuotation.battery_capacity_kwh),
+          dod_percent: Number(updatedQuotation.dod_percent),
+          package: updatedQuotation.solar_package_name,
+          installed_solar_kwp: Number(updatedQuotation.installed_solar_kwp),
+        })
+        .eq('id', recordId)
+        .select()
+        .single();
+
+      if (recordError || !updatedRecord) {
+        return res.status(500).json({
+          configured: true,
+          record: null,
+          error: recordError?.message || 'Failed to update saved_records',
+        });
+      }
+
+      return res.json({
+        configured: true,
+        record: mapSupabaseRowToPayload({
+          ...updatedRecord,
+          calculator_quotations: updatedQuotation,
+        }),
+      });
+    } catch (err) {
+      return res.status(500).json({
+        configured: true,
+        record: null,
+        error: err instanceof Error ? err.message : 'Supabase update failed',
+      });
+    }
+  });
+
   app.delete('/api/quotations/:id', async (req: Request, res: Response) => {
     const supabase = getServerSupabase();
     if (!supabase) {

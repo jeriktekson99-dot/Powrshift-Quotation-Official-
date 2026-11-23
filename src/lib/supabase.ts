@@ -171,6 +171,119 @@ export async function saveQuotationToSupabase(
 }
 
 /**
+ * Updates an existing quotation (`calculator_quotations` & `saved_records`) in Supabase.
+ */
+export async function updateQuotationInSupabase(
+  payload: QuotationPayload
+): Promise<SupabaseSaveResult> {
+  try {
+    const res = await fetch(
+      `/api/quotations/${encodeURIComponent(payload.id)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (res.ok || res.status === 500 || res.status === 400) {
+      const json = (await res.json()) as SupabaseSaveResult;
+      if (json.configured) {
+        return json;
+      }
+    }
+  } catch {
+    // Fall through to direct client check if API route is unavailable
+  }
+
+  if (!supabase) {
+    return { configured: false, record: null };
+  }
+
+  try {
+    let quotationId = payload.quotationId?.trim() || '';
+    if (!quotationId) {
+      const { data: existing } = await supabase
+        .from('saved_records')
+        .select('quotation_id')
+        .eq('id', payload.id)
+        .maybeSingle();
+      if (existing?.quotation_id) {
+        quotationId = existing.quotation_id;
+      }
+    }
+
+    const quotationValues = buildCalculatorQuotationInsert(payload);
+    let updatedQuotation;
+
+    if (quotationId) {
+      const { data, error } = await supabase
+        .from('calculator_quotations')
+        .update(quotationValues)
+        .eq('id', quotationId)
+        .select()
+        .single();
+      if (error || !data) {
+        const message = error?.message || 'Failed to update quotation';
+        console.error('Supabase update calculator_quotations error:', message);
+        return { configured: true, record: null, error: message };
+      }
+      updatedQuotation = data;
+    } else {
+      const { data, error } = await supabase
+        .from('calculator_quotations')
+        .insert(quotationValues)
+        .select()
+        .single();
+      if (error || !data) {
+        const message = error?.message || 'Failed to create linked quotation';
+        console.error('Supabase insert calculator_quotations error:', message);
+        return { configured: true, record: null, error: message };
+      }
+      updatedQuotation = data;
+    }
+
+    const { data: updatedRecord, error: recordError } = await supabase
+      .from('saved_records')
+      .update({
+        quotation_id: updatedQuotation.id,
+        name: updatedQuotation.client_full_name,
+        reference_number: updatedQuotation.quote_reference,
+        address: updatedQuotation.site_location_address,
+        phone_number: updatedQuotation.contact_phone,
+        email: updatedQuotation.email_address,
+        battery_storage: Number(updatedQuotation.battery_capacity_kwh),
+        dod_percent: Number(updatedQuotation.dod_percent),
+        package: updatedQuotation.solar_package_name,
+        installed_solar_kwp: Number(updatedQuotation.installed_solar_kwp),
+      })
+      .eq('id', payload.id)
+      .select()
+      .single();
+
+    if (recordError || !updatedRecord) {
+      const message = recordError?.message || 'Failed to update saved record';
+      console.error('Supabase update saved_records error:', message);
+      return { configured: true, record: null, error: message };
+    }
+
+    return {
+      configured: true,
+      record: mapSupabaseRowToPayload({
+        ...updatedRecord,
+        calculator_quotations: updatedQuotation,
+      }),
+    };
+  } catch (err) {
+    console.error('Supabase update error:', err);
+    return {
+      configured: true,
+      record: null,
+      error: err instanceof Error ? err.message : 'Supabase update failed',
+    };
+  }
+}
+
+/**
  * Deletes a saved record (and its linked calculator_quotations row) from Supabase.
  */
 export async function deleteQuotationFromSupabase(

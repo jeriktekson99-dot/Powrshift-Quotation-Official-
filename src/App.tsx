@@ -11,6 +11,7 @@ import {
   fetchQuotationsFromSupabase,
   restoreDefaultQuotationsInSupabase,
   saveQuotationToSupabase,
+  updateQuotationInSupabase,
   type QuotationPayload,
 } from './lib/supabase';
 import {
@@ -282,6 +283,7 @@ export default function App() {
   const [activeLoadedId, setActiveLoadedId] = useState<string>('');
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isUpdating, setIsUpdating] = useState<boolean>(false);
   const [isLoadingRecords, setIsLoadingRecords] = useState<boolean>(true);
 
   // Load saved records from Supabase on mount (fallback to localStorage only if unconfigured/unavailable)
@@ -426,12 +428,12 @@ export default function App() {
     setDaytimeLoadPercent(record.daytimeLoadPercent ?? 40);
     setNighttimeLoadPercent(record.nighttimeLoadPercent ?? 60);
 
-    if (record.peakSunHours) setPeakSunHours(record.peakSunHours);
-    if (record.dodPercent) setDodPercent(record.dodPercent);
-    if (record.systemLossBuffer) setSystemLossBuffer(record.systemLossBuffer);
-    if (record.derateFactor) setDerateFactor(record.derateFactor);
-    if (record.costPerKwp) setCostPerKwp(record.costPerKwp);
-    if (record.costPerBatteryKwh) setCostPerBatteryKwh(record.costPerBatteryKwh);
+    setPeakSunHours(record.peakSunHours ?? 5.0);
+    setDodPercent(record.dodPercent ?? 80);
+    setSystemLossBuffer(record.systemLossBuffer ?? 20);
+    setDerateFactor(record.derateFactor ?? 15);
+    setCostPerKwp(record.costPerKwp ?? 52000);
+    setCostPerBatteryKwh(record.costPerBatteryKwh ?? 18500);
 
     setActiveLoadedId(record.id);
     setActiveMainTab('calculator');
@@ -664,6 +666,201 @@ export default function App() {
   const handleUpdateCalculations = () => {
     setUpdateFeedback(true);
     setTimeout(() => setUpdateFeedback(false), 1800);
+  };
+
+  const getComparableSignature = (q: {
+    clientName: string;
+    clientEmail: string;
+    clientPhone: string;
+    siteAddress: string;
+    quoteReference: string;
+    engineerName: string;
+    quoteDate: string;
+    usageMode: 'KWH' | 'BILL';
+    electricityRate: number;
+    monthlyUsageKwh: number;
+    billAmountInput: number;
+    configTab?: 'STANDARD' | 'ADVANCED';
+    selectedPackageId: string;
+    installedSolarKwp: number;
+    installedBatteryKwh: number;
+    daytimeLoadPercent: number;
+    nighttimeLoadPercent: number;
+    peakSunHours?: number;
+    dodPercent?: number;
+    systemLossBuffer?: number;
+    derateFactor?: number;
+    costPerKwp?: number;
+    costPerBatteryKwh?: number;
+  }) => {
+    const rate = Number(q.electricityRate || 12.0);
+    const kwh = Number(q.monthlyUsageKwh || 940);
+    const bill = Number(q.billAmountInput ?? Math.round(kwh * rate));
+    const kwp = Number(q.installedSolarKwp || 0);
+    const batt = Number(q.installedBatteryKwh || 0);
+    const dayPct = Number(q.daytimeLoadPercent ?? 40);
+    const nightPct = Number(q.nighttimeLoadPercent ?? 60);
+    const psh = Number(q.peakSunHours ?? 5.0);
+    const dod = Number(q.dodPercent ?? 80);
+    const lossBuf = Number(q.systemLossBuffer ?? 20);
+    const derate = Number(q.derateFactor ?? 15);
+    const kwpCost = Number(q.costPerKwp ?? 52000);
+    const battCost = Number(q.costPerBatteryKwh ?? 18500);
+
+    const avgDaily = Number((kwh / 30).toFixed(2));
+    const dayKwh = Number(((kwh / 30) * (dayPct / 100)).toFixed(2));
+    const nightKwh = Number(((kwh / 30) * (nightPct / 100)).toFixed(2));
+    const recSize = Number((kwp * 1.2).toFixed(2));
+    const estDailyGen = Number((kwp * (1 - derate / 100) * psh).toFixed(2));
+    const usableBatt = Number((batt * (dod / 100)).toFixed(2));
+    const reserveBatt = Number((batt * (1 - dod / 100)).toFixed(2));
+    const gridImport = Number(Math.max(0, nightKwh - usableBatt).toFixed(2));
+
+    return JSON.stringify([
+      (q.clientName || '').trim() || 'Unnamed Client',
+      q.clientEmail || '',
+      q.clientPhone || '',
+      q.siteAddress || '',
+      q.quoteReference || 'PS-2026-0000',
+      q.engineerName || 'Engr. M. Ramos (Lead Systems Architect)',
+      q.quoteDate || '',
+      q.usageMode || 'KWH',
+      rate,
+      kwh,
+      bill,
+      q.configTab || 'STANDARD',
+      q.selectedPackageId || 'pkg-10kw',
+      kwp,
+      batt,
+      dayPct,
+      nightPct,
+      psh,
+      dod,
+      lossBuf,
+      derate,
+      kwpCost,
+      battCost,
+      avgDaily,
+      dayKwh,
+      nightKwh,
+      recSize,
+      estDailyGen,
+      usableBatt,
+      reserveBatt,
+      gridImport,
+    ]);
+  };
+
+  const activeLoadedRecord = savedQuotations.find((q) => q.id === activeLoadedId) || null;
+  const hasPendingChanges = activeLoadedRecord
+    ? getComparableSignature({
+        clientName,
+        clientEmail,
+        clientPhone,
+        siteAddress,
+        quoteReference,
+        engineerName,
+        quoteDate,
+        usageMode,
+        electricityRate,
+        monthlyUsageKwh,
+        billAmountInput,
+        configTab,
+        selectedPackageId,
+        installedSolarKwp,
+        installedBatteryKwh,
+        daytimeLoadPercent,
+        nighttimeLoadPercent,
+        peakSunHours,
+        dodPercent,
+        systemLossBuffer,
+        derateFactor,
+        costPerKwp,
+        costPerBatteryKwh,
+      }) !== getComparableSignature(activeLoadedRecord)
+    : false;
+  const canUpdate = Boolean(activeLoadedRecord) && hasPendingChanges && !isUpdating && !isSaving;
+
+  const handleUpdateCurrentQuotation = async () => {
+    if (!activeLoadedRecord || !hasPendingChanges || isUpdating || isSaving) return;
+    setIsUpdating(true);
+    try {
+      const currentPkg = SOLAR_PACKAGES.find((p) => p.id === selectedPackageId)?.name || 'Custom Package';
+      const updatedPayload: SavedQuotation = {
+        ...activeLoadedRecord,
+        savedAt: new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        }),
+        clientName: clientName.trim() || 'Unnamed Client',
+        clientEmail,
+        clientPhone,
+        siteAddress,
+        quoteReference,
+        engineerName,
+        quoteDate,
+        usageMode,
+        electricityRate,
+        monthlyUsageKwh,
+        billAmountInput,
+        configTab,
+        selectedPackageId,
+        installedSolarKwp,
+        installedBatteryKwh,
+        daytimeLoadPercent,
+        nighttimeLoadPercent,
+        peakSunHours,
+        dodPercent,
+        systemLossBuffer,
+        derateFactor,
+        costPerKwp,
+        costPerBatteryKwh,
+        packageName: currentPkg,
+        averageDailyLoadKwh: Number(averageDailyLoad.toFixed(2)),
+        daytimeLoadKwh: Number(daytimeLoadKwh.toFixed(2)),
+        nighttimeLoadKwh: Number(nighttimeLoadKwh.toFixed(2)),
+        recommendedSizeAfterLossKwp: Number(recommendedSizeAfterLoss.toFixed(2)),
+        estDailySolarGenerationKwh: Number(estDailySolarGeneration.toFixed(2)),
+        estMonthlySolarGenerationKwh: Number(monthlySolarGeneration.toFixed(2)),
+        usableBatteryKwh: Number(usableBatteryCapacity.toFixed(2)),
+        reserveCapacityKwh: Number(reserveBatteryCapacity.toFixed(2)),
+        gridImportRequiredKwh: Number(nighttimeGridImportNeeded.toFixed(2)),
+      };
+
+      const result = await updateQuotationInSupabase(updatedPayload);
+      const persistedRecord = result.record ?? updatedPayload;
+
+      setSavedQuotations((prev) => {
+        const updatedList = prev.map((q) =>
+          q.id === activeLoadedRecord.id ? persistedRecord : q
+        );
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedList));
+        } catch (e) {
+          console.error('Failed to update localStorage', e);
+        }
+        return updatedList;
+      });
+      setActiveLoadedId(persistedRecord.id);
+
+      if (result.record) {
+        setSaveToast(`Quotation for "${persistedRecord.clientName}" updated in Supabase!`);
+      } else if (result.configured && result.error) {
+        setSaveToast(`Updated locally — Supabase error: ${result.error}`);
+      } else {
+        setSaveToast(`Quotation for "${persistedRecord.clientName}" updated locally!`);
+      }
+    } catch (err) {
+      setSaveToast(
+        `Update error: ${err instanceof Error ? err.message : 'Unable to update quotation'}`
+      );
+    } finally {
+      setIsUpdating(false);
+      setTimeout(() => setSaveToast(null), 4000);
+    }
   };
 
   // Generate & Download PDF Proposal using html2canvas & jsPDF
@@ -1428,12 +1625,34 @@ Prepared by: ${engineerName}
                   </button>
 
                   <button
+                    type="button"
+                    onClick={handleUpdateCurrentQuotation}
+                    disabled={!canUpdate}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border transition-all shadow-sm ${
+                      canUpdate
+                        ? 'bg-[#059669] text-white border-[#059669] hover:bg-[#047857] active:scale-95'
+                        : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-70'
+                    }`}
+                    title={
+                      !activeLoadedRecord
+                        ? 'Load or save a quotation first to enable Update'
+                        : !hasPendingChanges
+                        ? 'Modify Client Info, Tariff & Usage, Active Hardware, or Performance to enable Update'
+                        : 'Update the active saved quotation'
+                    }
+                  >
+                    <CheckCircle2 className={`w-3.5 h-3.5 ${isUpdating ? 'animate-spin' : ''}`} />
+                    <span>Update</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleUpdateCalculations}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-white text-slate-700 hover:text-slate-900 border border-slate-300 hover:bg-slate-50 transition-all shadow-sm active:scale-95"
                     title="Recompute all engineering yields, battery sizing, and financial ROI"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 text-[#0A3A1E] ${updateFeedback ? 'animate-spin' : ''}`} />
-                    <span>Recalculate System</span>
+                    <span>Recalculate</span>
                   </button>
 
                   {updateFeedback && (
